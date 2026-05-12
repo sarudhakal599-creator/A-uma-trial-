@@ -1,0 +1,252 @@
+```react
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+
+/**
+ * UMA v12.0 - Universal Multimodal Assistant
+ * Built with React + Tailwind + Gemini API
+ */
+
+const UMA_GREEN = "#00FF99";
+const UMA_DARK = "#050807";
+const UMA_PANEL = "#121514";
+
+// --- API Service Logic ---
+const apiKey = ""; // Environment will provide this
+
+async function callGeminiAPI(payload, retries = 0) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      if (response.status === 429 && retries < 5) {
+        const delay = Math.pow(2, retries) * 1000;
+        await new Promise(res => setTimeout(res, delay));
+        return callGeminiAPI(payload, retries + 1);
+      }
+      const errData = await response.json();
+      throw new Error(errData.error?.message || "API request failed");
+    }
+
+    return await response.json();
+  } catch (error) {
+    if (retries < 5) {
+      const delay = Math.pow(2, retries) * 1000;
+      await new Promise(res => setTimeout(res, delay));
+      return callGeminiAPI(payload, retries + 1);
+    }
+    throw error;
+  }
+}
+
+// --- Components ---
+
+const TopBar = ({ onClear }) => (
+  <div className="flex flex-col gap-2 p-4 border-b border-white/10 bg-[#050807]">
+    <div className="flex justify-between items-center">
+      <div className="flex items-center gap-3">
+        <div className="bg-[#00FF99] px-2 py-1 rounded shadow-[0_0_10px_#00FF9966]">
+          <span className="text-black font-black text-sm tracking-tighter">UMA v12.0</span>
+        </div>
+        <div className="hidden md:block">
+          <p className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">Universal Multimodal Assistant</p>
+        </div>
+      </div>
+      <button 
+        onClick={onClear}
+        className="text-[10px] font-mono text-red-500/70 hover:text-red-400 border border-red-500/20 px-2 py-1 rounded transition-colors"
+      >
+        PURGE CACHE
+      </button>
+    </div>
+    
+    <div className="flex items-center gap-4">
+      <div className="flex items-center gap-1.5">
+        <div className="w-1.5 h-1.5 rounded-full bg-[#00FF99] animate-pulse" />
+        <span className="text-[#00FF99] text-[10px] font-bold tracking-widest uppercase">Fast Mode Active</span>
+      </div>
+      <div className="h-3 w-px bg-white/10" />
+      <span className="text-gray-500 text-[10px] font-mono">LATENCY: 14ms</span>
+    </div>
+  </div>
+);
+
+const MessageBubble = ({ role, content, type = "text" }) => {
+  const isUser = role === "user";
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}
+    >
+      <div 
+        className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-lg ${
+          isUser 
+            ? "bg-[#00FF99] text-black font-medium" 
+            : "bg-[#121514] text-gray-200 border border-white/5"
+        }`}
+      >
+        {content}
+      </div>
+    </motion.div>
+  );
+};
+
+export default function App() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [image, setImage] = useState(null);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("uma_v12_history");
+    if (saved) setMessages(JSON.parse(saved));
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("uma_v12_history", JSON.stringify(messages));
+    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setImage(reader.result);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSend = async () => {
+    if (!input.trim() && !image) return;
+
+    const userMsg = { role: "user", content: input || "Sent an image." };
+    setMessages(prev => [...prev, userMsg]);
+    setInput("");
+    setLoading(true);
+
+    const parts = [{ text: input || "Describe this image" }];
+    if (image) {
+      parts.push({
+        inlineData: {
+          mimeType: "image/png",
+          data: image.split(",")[1]
+        }
+      });
+    }
+
+    const payload = {
+      contents: [{ role: "user", parts }],
+      systemInstruction: {
+        parts: [{ text: "You are UMA v12.0, a high-performance Multimodal AI. Keep responses concise, technical, and formatted for a mobile-first dark UI. Use UMA v12.0 as your identity." }]
+      }
+    };
+
+    try {
+      const data = await callGeminiAPI(payload);
+      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "No response.";
+      setMessages(prev => [...prev, { role: "model", content: reply }]);
+      setImage(null);
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "model", content: `ERR_CORE: ${err.message}` }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-[#050807] text-white font-sans overflow-hidden">
+      <TopBar onClear={() => setMessages([])} />
+
+      {/* Chat Area */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full opacity-20 select-none">
+            <div className="w-20 h-20 border-2 border-[#00FF99] rounded-full flex items-center justify-center animate-pulse">
+              <span className="text-[#00FF99] font-black text-2xl tracking-tighter">UMA</span>
+            </div>
+            <p className="mt-4 font-mono text-[10px] tracking-widest uppercase">Systems Standby... Waiting for Input</p>
+          </div>
+        )}
+        
+        {messages.map((msg, idx) => (
+          <MessageBubble key={idx} {...msg} />
+        ))}
+        {loading && (
+          <div className="flex justify-start">
+            <div className="bg-[#121514] px-4 py-2 rounded-2xl border border-white/5 animate-pulse">
+              <div className="flex gap-1">
+                <div className="w-1.5 h-1.5 bg-[#00FF99] rounded-full animate-bounce" />
+                <div className="w-1.5 h-1.5 bg-[#00FF99] rounded-full animate-bounce [animation-delay:0.2s]" />
+                <div className="w-1.5 h-1.5 bg-[#00FF99] rounded-full animate-bounce [animation-delay:0.4s]" />
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={scrollRef} />
+      </div>
+
+      {/* Input Area */}
+      <div className="p-4 bg-[#050807] border-t border-white/5">
+        <AnimatePresence>
+          {image && (
+            <motion.div 
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="mb-3 relative inline-block"
+            >
+              <img src={image} className="w-20 h-20 object-cover rounded-xl border border-[#00FF99]/50" alt="upload" />
+              <button 
+                onClick={() => setImage(null)}
+                className="absolute -top-2 -right-2 bg-red-500 rounded-full w-5 h-5 text-[10px] flex items-center justify-center"
+              >
+                ✕
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="flex items-center gap-3 bg-[#121514] rounded-[24px] px-4 py-2 border border-white/10 shadow-xl focus-within:border-[#00FF99]/30 transition-all">
+          <label className="cursor-pointer hover:opacity-70 transition-opacity">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <input type="file" hidden accept="image/*" onChange={handleImageUpload} />
+          </label>
+          
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+            placeholder="Type your instruction..."
+            className="flex-1 bg-transparent border-none outline-none text-sm py-2 placeholder:text-gray-600"
+          />
+
+          <button
+            onClick={handleSend}
+            disabled={loading}
+            className="bg-[#00FF99] p-2.5 rounded-full shadow-[0_0_15px_#00FF9944] active:scale-90 transition-transform disabled:opacity-50"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-black" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+
+        {/* Footer info from screenshot */}
+        <div className="flex justify-between items-center mt-4 px-2 text-[8px] font-mono text-gray-600 tracking-tighter uppercase">
+          <div>ENGINE: <span className="text-[#00FF99]">GEMINI-2.5-FLASH</span></div>
+          <div>CORE: <span className="text-[#00FF99]">STABLE</span></div>
+          <div>UMA <span className="text-[#00FF99]">v12.0.4</span></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+```
+
